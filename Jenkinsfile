@@ -44,13 +44,12 @@ def parseTestNGResults() {
                 # 提取测试用例信息（使用 Python 或简单的 sed/grep 组合）
                 # 方法1：尝试使用 Python（如果可用）
                 if command -v python3 &> /dev/null; then
-                    python3 << 'PYTHON_SCRIPT'
+                    python3 <<EOF
 import sys
-import re
 import xml.etree.ElementTree as ET
 
 try:
-    xml_file = sys.argv[1]
+    xml_file = "$XML_FILE"
     tree = ET.parse(xml_file)
     root = tree.getroot()
     
@@ -68,12 +67,13 @@ try:
         else:
             status = 'PASSED'
         
-        print(f"TEST_CASE_{index}:{name}|{classname}|{time}|{status}")
+        print("TEST_CASE_{}:{}|{}|{}|{}".format(index, name, classname, time, status))
         index += 1
 except Exception as e:
     sys.exit(1)
-PYTHON_SCRIPT
-                    python3 - "$XML_FILE" || {
+EOF
+                    if [ $? -ne 0 ]; then
+                        # Python 失败，使用 sed/grep 方法
                         # 如果 Python 失败，使用 sed/grep 方法
                         INDEX=1
                         while IFS= read -r line; do
@@ -102,7 +102,7 @@ PYTHON_SCRIPT
                                 TIME=""
                             fi
                         done < "$XML_FILE"
-                    }
+                    fi
                 else
                     # 方法2：使用 sed 和 grep 的简化方法
                     INDEX=1
