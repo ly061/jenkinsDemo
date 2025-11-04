@@ -74,7 +74,6 @@ except Exception as e:
 EOF
                     if [ $? -ne 0 ]; then
                         # Python 失败，使用 sed/grep 方法
-                        # 如果 Python 失败，使用 sed/grep 方法
                         INDEX=1
                         while IFS= read -r line; do
                             if [[ "$line" =~ name=\"([^\"]+)\" ]]; then
