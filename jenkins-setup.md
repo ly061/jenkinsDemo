@@ -226,6 +226,138 @@ stage('Test') {
 ### 问题4：权限问题
 - 确保 Jenkins 用户有执行 Maven 和访问项目目录的权限
 
+### 问题5：GitHub 连接失败（HTTPS 无法连接）
+
+**错误信息：**
+```
+fatal: unable to access 'https://github.com/ly061/jenkinsDemo.git/': 
+Failed to connect to github.com port 443 after 75000 ms: Couldn't connect to server
+```
+
+**解决方案：**
+
+#### 方案1：使用 SSH 代替 HTTPS（推荐）
+
+1. **在 Jenkins 服务器上配置 SSH 密钥：**
+   ```bash
+   # 以 Jenkins 用户身份登录服务器
+   sudo su - jenkins
+   
+   # 生成 SSH 密钥（如果还没有）
+   ssh-keygen -t rsa -b 4096 -C "jenkins@your-server"
+   
+   # 查看公钥
+   cat ~/.ssh/id_rsa.pub
+   ```
+
+2. **将公钥添加到 GitHub：**
+   - 登录 GitHub → Settings → SSH and GPG keys
+   - 点击 "New SSH key"
+   - 粘贴公钥内容并保存
+
+3. **在 Jenkins 中更改仓库地址：**
+   - 进入 Pipeline Job 配置页面
+   - 在 "Pipeline script from SCM" 部分
+   - 将 Repository URL 改为：`git@github.com:ly061/jenkinsDemo.git`
+   - 保存并重新构建
+
+#### 方案2：配置代理服务器
+
+如果 Jenkins 服务器需要通过代理访问外网：
+
+1. **配置 Jenkins 全局代理：**
+   - 系统管理 → 系统配置 → 代理配置
+   - 填写代理服务器信息：
+     - 代理主机名：`your-proxy-host`
+     - 代理端口：`8080`
+     - 用户名和密码（如果需要）
+   - 在 "No Proxy Host" 中添加：`localhost,127.0.0.1`
+
+2. **配置 Git 使用代理：**
+   - 在 Pipeline 的 Checkout 阶段之前添加：
+   ```groovy
+   stage('Setup Proxy') {
+       steps {
+           sh '''
+           git config --global http.proxy http://proxy-host:port
+           git config --global https.proxy http://proxy-host:port
+           '''
+       }
+   }
+   ```
+
+#### 方案3：使用 GitHub 个人访问令牌（Personal Access Token）
+
+1. **创建 GitHub 访问令牌：**
+   - GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
+   - 点击 "Generate new token (classic)"
+   - 选择权限：`repo`（完整仓库访问权限）
+   - 生成并复制令牌
+
+2. **在 Jenkins 中配置凭据：**
+   - 系统管理 → Manage Credentials
+   - 添加凭据：
+     - 类型：Username with password
+     - Username：你的 GitHub 用户名
+     - Password：刚才生成的访问令牌
+     - ID：`github-token`（或其他标识）
+
+3. **在 Pipeline 配置中使用凭据：**
+   - 在 "Pipeline script from SCM" 配置中
+   - Credentials 选择刚才创建的凭据
+   - Repository URL 使用 HTTPS：`https://github.com/ly061/jenkinsDemo.git`
+
+#### 方案4：检查网络连接
+
+在 Jenkins 服务器上测试连接：
+
+```bash
+# 测试 GitHub 连接
+ping github.com
+
+# 测试 HTTPS 连接
+curl -I https://github.com
+
+# 测试 SSH 连接
+ssh -T git@github.com
+```
+
+#### 方案5：使用本地文件系统（临时方案）
+
+如果网络问题暂时无法解决，可以：
+
+1. **手动克隆仓库到 Jenkins 服务器：**
+   ```bash
+   cd /var/jenkins_home/workspace
+   git clone https://github.com/ly061/jenkinsDemo.git
+   ```
+
+2. **修改 Jenkinsfile 使用本地路径：**
+   ```groovy
+   stage('Checkout') {
+       steps {
+           dir('jenkinsDemo') {
+               // 使用本地代码
+           }
+       }
+   }
+   ```
+
+#### 推荐配置（SSH 方式）
+
+**Pipeline 配置示例：**
+```
+Repository URL: git@github.com:ly061/jenkinsDemo.git
+Credentials: (选择 SSH 凭据或留空)
+Branch Specifier: */main
+Script Path: Jenkinsfile
+```
+
+**注意事项：**
+- 确保 Jenkins 服务器可以访问 GitHub（端口 22 用于 SSH）
+- 如果防火墙阻止 SSH，需要开放端口 22
+- 使用 SSH 方式不需要配置用户名和密码
+
 ---
 
 ## 最佳实践
