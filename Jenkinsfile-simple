@@ -1,0 +1,38 @@
+// 简化版 Jenkinsfile - 适用于快速配置
+pipeline {
+    agent any
+    
+    stages {
+        stage('Clean') {
+            steps {
+                sh 'mvn clean'
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                sh 'mvn test'
+            }
+            post {
+                always {
+                    // 发布测试结果
+                    publishTestResults testResultsPattern: 'target/surefire-reports/*.xml'
+                    
+                    // 发布 HTML 报告
+                    publishHTML([
+                        reportDir: 'target/surefire-reports',
+                        reportFiles: 'index.html',
+                        reportName: 'TestNG 测试报告'
+                    ])
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo '构建完成'
+        }
+    }
+}
+
