@@ -131,13 +131,19 @@ pipeline {
                     // 发布测试报告
                     publishTestResults testResultsPattern: 'target/surefire-reports/*.xml'
                     
-                    // 发布 TestNG HTML 报告
-                    publishHTML([
-                        reportDir: 'target/surefire-reports',
-                        reportFiles: 'index.html',
-                        reportName: 'TestNG 测试报告',
-                        keepAll: true
-                    ])
+                    // 发布 TestNG HTML 报告（需要安装 HTML Publisher Plugin）
+                    try {
+                        publishHTML([
+                            reportDir: 'target/surefire-reports',
+                            reportFiles: 'index.html',
+                            reportName: 'TestNG 测试报告',
+                            keepAll: true,
+                            alwaysLinkToLastBuild: true,
+                            allowMissing: false
+                        ])
+                    } catch (Exception e) {
+                        echo "HTML Publisher Plugin 未安装或配置错误，跳过 HTML 报告发布: ${e.message}"
+                    }
                     
                     // 归档测试报告
                     archiveArtifacts artifacts: 'target/surefire-reports/**/*', fingerprint: true
