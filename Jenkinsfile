@@ -28,16 +28,70 @@ pipeline {
             }
         }
         
+        stage('Setup Maven') {
+            steps {
+                script {
+                    echo '=== 设置 Maven 环境 ==='
+                    // 尝试查找 Maven（包括用户的 Maven 安装路径）
+                    def mavenPath = sh(
+                        script: '''
+                            # 尝试多个常见的 Maven 路径
+                            if command -v mvn &> /dev/null; then
+                                which mvn
+                            elif [ -f /Users/joe/Documents/tools/apache-maven-3.9.9/bin/mvn ]; then
+                                echo /Users/joe/Documents/tools/apache-maven-3.9.9/bin/mvn
+                            elif [ -f /opt/homebrew/bin/mvn ]; then
+                                echo /opt/homebrew/bin/mvn
+                            elif [ -f /usr/local/bin/mvn ]; then
+                                echo /usr/local/bin/mvn
+                            elif [ -f /usr/bin/mvn ]; then
+                                echo /usr/bin/mvn
+                            else
+                                echo "NOT_FOUND"
+                            fi
+                        ''',
+                        returnStdout: true
+                    ).trim()
+                    
+                    if (mavenPath == "NOT_FOUND" || mavenPath == "") {
+                        error("""
+                            ❌ Maven 未找到！
+                            
+                            解决方案：
+                            1. 在 Jenkins 中配置 Maven 工具（推荐）：
+                               - 系统管理 → 全局工具配置 → Maven 安装
+                               - 名称：Maven-3.9.9
+                               - MAVEN_HOME：/Users/joe/Documents/tools/apache-maven-3.9.9
+                               - 然后在 Jenkinsfile 中取消注释 tools 部分
+                            
+                            2. 或者使用 Jenkinsfile-with-tools 并配置工具名称
+                        """)
+                    } else {
+                        echo "找到 Maven: ${mavenPath}"
+                        // 设置 MAVEN_HOME 和 PATH
+                        def mavenHome = sh(
+                            script: "dirname $(dirname ${mavenPath})",
+                            returnStdout: true
+                        ).trim()
+                        env.MAVEN_HOME = mavenHome
+                        env.PATH = "${sh(script: 'dirname ' + mavenPath, returnStdout: true).trim()}:${env.PATH}"
+                        echo "MAVEN_HOME: ${env.MAVEN_HOME}"
+                        echo "PATH: ${env.PATH}"
+                    }
+                }
+            }
+        }
+        
         stage('Environment Check') {
             steps {
                 script {
                     echo '=== 检查环境 ==='
                     sh '''
                         echo "Java 版本:"
-                        java -version || echo "Java 未找到，请确保已安装 Java 并在 PATH 中"
+                        java -version || echo "Java 未找到"
                         echo ""
-                        echo "Maven 版本:"
-                        mvn -version || echo "Maven 未找到，请确保已安装 Maven 并在 PATH 中"
+                        echo "Maven 版本和路径:"
+                        mvn -version || echo "Maven 未找到"
                     '''
                 }
             }
