@@ -30,20 +30,30 @@
 2. 将 `Jenkinsfile` 的内容复制粘贴到脚本框中
 3. 保存配置
 
-### 3. 配置工具（JDK 和 Maven）
+### 3. 配置工具（JDK 和 Maven）- 可选
 
-在 Jenkins 中配置工具：
+**方式 A：使用系统默认工具（推荐，更简单）**
+
+如果 Jenkins 节点上已安装 Maven 和 Java 并在 PATH 中可用，可以直接使用，无需额外配置。
+
+当前 `Jenkinsfile` 已配置为使用系统默认工具，可以直接运行。
+
+**方式 B：在 Jenkins 中配置工具（可选）**
+
+如果需要使用特定版本的工具，可以在 Jenkins 中配置：
 
 1. 进入 **系统管理** (Manage Jenkins) → **全局工具配置** (Global Tool Configuration)
 2. 配置 JDK：
    - 点击 "JDK 安装" 的 "新增 JDK"
-   - 名称：`JDK-17`
-   - JAVA_HOME：`/Users/joe/Documents/tools/jdk-17.0.2.jdk/Contents/Home`（根据你的实际路径调整）
+   - 名称：`JDK-17`（或其他名称）
+   - JAVA_HOME：`/path/to/jdk`（根据你的实际路径调整）
 3. 配置 Maven：
    - 点击 "Maven 安装" 的 "新增 Maven"
-   - 名称：`Maven-3.9.9`
-   - MAVEN_HOME：`/Users/joe/Documents/tools/apache-maven-3.9.9`（根据你的实际路径调整）
+   - 名称：`Maven-3.9.9`（或其他名称）
+   - MAVEN_HOME：`/path/to/maven`（根据你的实际路径调整）
 4. 保存配置
+5. 在 `Jenkinsfile` 中取消注释 `tools` 部分，并修改工具名称为你配置的名称
+6. 或者使用 `Jenkinsfile-with-tools` 文件
 
 ### 4. 安装必要的插件
 
@@ -211,12 +221,59 @@ stage('Test') {
 ## 故障排查
 
 ### 问题1：找不到 Maven 命令
-- 确保在 Jenkins 中正确配置了 Maven
-- 或者在构建步骤中使用完整路径：`/path/to/maven/bin/mvn test`
+- 确保 Jenkins 节点上已安装 Maven 并在 PATH 中可用
+- 检查构建日志中的 "Environment Check" 阶段输出
+- 如果使用工具配置，确保在 Jenkins 中正确配置了 Maven 工具名称
+- 或者使用完整路径：`/path/to/maven/bin/mvn test`
 
 ### 问题2：找不到 JDK
-- 确保在 Jenkins 中正确配置了 JDK
+- 确保 Jenkins 节点上已安装 Java 并在 PATH 中可用
+- 检查构建日志中的 "Environment Check" 阶段输出
+- 如果使用工具配置，确保在 Jenkins 中正确配置了 JDK 工具名称
 - 检查 JAVA_HOME 环境变量
+
+### 问题6：工具配置错误（Tool type "maven" does not have an install configured）
+
+**错误信息：**
+```
+Tool type "maven" does not have an install of "Maven-3.9.9" configured
+```
+
+**解决方案：**
+
+#### 方案1：使用系统默认工具（推荐）
+
+当前 `Jenkinsfile` 已配置为使用系统默认的 Maven 和 Java，无需在 Jenkins 中配置工具。
+
+**前提条件：**
+- Jenkins 节点上已安装 Maven 和 Java
+- Maven 和 Java 在系统 PATH 中可用
+
+**验证方法：**
+在 Jenkins 节点上执行：
+```bash
+which mvn
+which java
+mvn -version
+java -version
+```
+
+#### 方案2：配置 Jenkins 工具
+
+如果需要在 Jenkins 中配置工具：
+
+1. **配置工具：**
+   - 系统管理 → 全局工具配置
+   - 添加 Maven 和 JDK，并记录工具名称
+
+2. **修改 Jenkinsfile：**
+   - 取消注释 `tools` 部分
+   - 修改工具名称为你配置的名称
+   - 或者使用 `Jenkinsfile-with-tools` 并修改工具名称
+
+3. **工具名称必须完全匹配：**
+   - 工具名称区分大小写
+   - 必须与 Jenkins 中配置的名称完全一致
 
 ### 问题3：测试报告无法显示
 - 确保安装了 HTML Publisher Plugin

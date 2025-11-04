@@ -1,15 +1,13 @@
+// 使用预配置工具的版本 - 需要在 Jenkins 中配置工具
+// 配置方法：系统管理 → 全局工具配置 → Maven/JDK 安装
 pipeline {
     agent any
     
-    // 如果需要使用预配置的工具，取消下面的注释并配置正确的工具名称
-    // 配置方法：系统管理 → 全局工具配置 → Maven/JDK 安装
-    // tools {
-    //     maven 'Maven-3.9.9'  // 根据你的Jenkins中配置的Maven名称调整
-    //     jdk 'JDK-17'          // 根据你的Jenkins中配置的JDK名称调整
-    // }
-    
-    // 如果未配置工具，使用系统默认的 Maven 和 Java
-    // 确保 Jenkins 节点上已安装 Maven 和 Java，并在 PATH 中可用
+    tools {
+        // 配置 Maven 和 JDK（根据你的Jenkins中配置的工具名称调整）
+        maven 'Maven-3.9.9'  // 修改为你的 Maven 工具名称
+        jdk 'JDK-17'          // 修改为你的 JDK 工具名称
+    }
     
     options {
         // 保留最近10次构建的构建历史
@@ -24,21 +22,6 @@ pipeline {
                 script {
                     echo '=== 检出代码 ==='
                     checkout scm
-                }
-            }
-        }
-        
-        stage('Environment Check') {
-            steps {
-                script {
-                    echo '=== 检查环境 ==='
-                    sh '''
-                        echo "Java 版本:"
-                        java -version || echo "Java 未找到，请确保已安装 Java 并在 PATH 中"
-                        echo ""
-                        echo "Maven 版本:"
-                        mvn -version || echo "Maven 未找到，请确保已安装 Maven 并在 PATH 中"
-                    '''
                 }
             }
         }
@@ -92,43 +75,19 @@ pipeline {
                 }
             }
         }
-        
-        stage('Archive Reports') {
-            steps {
-                script {
-                    echo '=== 归档测试报告 ==='
-                    // 确保报告目录存在
-                    sh 'mkdir -p target/surefire-reports || true'
-                }
-            }
-        }
     }
     
     post {
         always {
             script {
                 echo '=== 构建完成 ==='
-                // 清理临时文件（可选）
-                // sh 'rm -rf target/.maven'
             }
         }
         success {
             echo '🎉 Pipeline 执行成功！'
-            // 可以在这里添加通知，如发送邮件、Slack通知等
-            // emailext (
-            //     subject: "✅ TestNG 测试通过: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
-            //     body: "所有测试用例都已通过。",
-            //     to: "your-email@example.com"
-            // )
         }
         failure {
             echo '💥 Pipeline 执行失败！'
-            // 可以在这里添加失败通知
-            // emailext (
-            //     subject: "❌ TestNG 测试失败: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
-            //     body: "部分测试用例失败，请查看详细报告。",
-            //     to: "your-email@example.com"
-            // )
         }
         unstable {
             echo '⚠️ Pipeline 执行不稳定！'
