@@ -85,11 +85,11 @@ EOF
                             if [[ "$line" =~ time=\"([^\"]+)\" ]]; then
                                 TIME="${BASH_REMATCH[1]}"
                             fi
-                            if [[ "$line" =~ \<\/testcase\> ]]; then
+                            if echo "$line" | grep -q '</testcase>'; then
                                 # 检查这个测试用例是否有失败或跳过
                                 STATUS="PASSED"
                                 # 使用简单的字符串匹配判断
-                                if grep -A 5 "name=\"$NAME\"" "$XML_FILE" | grep -q '<failure\|<error'; then
+                                if grep -A 5 "name=\"$NAME\"" "$XML_FILE" | grep -q '<failure\\|<error'; then
                                     STATUS="FAILED"
                                 elif grep -A 5 "name=\"$NAME\"" "$XML_FILE" | grep -q '<skipped'; then
                                     STATUS="SKIPPED"
