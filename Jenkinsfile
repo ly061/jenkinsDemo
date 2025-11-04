@@ -70,11 +70,15 @@ pipeline {
                         echo "找到 Maven: ${mavenPath}"
                         // 设置 MAVEN_HOME 和 PATH
                         def mavenHome = sh(
-                            script: "dirname $(dirname ${mavenPath})",
+                            script: "dirname \$(dirname ${mavenPath})",
                             returnStdout: true
                         ).trim()
                         env.MAVEN_HOME = mavenHome
-                        env.PATH = "${sh(script: 'dirname ' + mavenPath, returnStdout: true).trim()}:${env.PATH}"
+                        def mavenBinDir = sh(
+                            script: "dirname ${mavenPath}",
+                            returnStdout: true
+                        ).trim()
+                        env.PATH = "${mavenBinDir}:${env.PATH}"
                         echo "MAVEN_HOME: ${env.MAVEN_HOME}"
                         echo "PATH: ${env.PATH}"
                     }
