@@ -1,3 +1,238 @@
+// 定义解析测试结果的函数
+def parseTestNGResults() {
+    def testCases = []
+    def totalTests = 0
+    def passedTests = 0
+    def failedTests = 0
+    def skippedTests = 0
+    
+    try {
+        // 查找 TestNG XML 报告文件
+        def testngXmlFiles = sh(
+            script: 'find target/surefire-reports -name "*.xml" -type f | grep -v testng-results.xml | head -1',
+            returnStdout: true
+        ).trim()
+        
+        if (testngXmlFiles) {
+            def xmlContent = readFile(testngXmlFiles)
+            
+            // 使用 Groovy XML 解析
+            def xml = new XmlSlurper().parseText(xmlContent)
+            
+            // 解析测试套件信息
+            totalTests = xml.testsuite.@tests.toInteger() ?: 0
+            passedTests = xml.testsuite.@passed.toInteger() ?: 0
+            failedTests = xml.testsuite.@failures.toInteger() ?: 0
+            skippedTests = xml.testsuite.@skipped.toInteger() ?: 0
+            
+            // 解析测试用例
+            xml.testsuite.testcase.each { testcase ->
+                def testCase = [
+                    name: testcase.@name.toString(),
+                    className: testcase.@classname.toString(),
+                    time: testcase.@time.toString(),
+                    status: 'PASSED'
+                ]
+                
+                // 检查是否有失败或跳过
+                if (testcase.failure.size() > 0) {
+                    testCase.status = 'FAILED'
+                    testCase.error = testcase.failure[0].@message.toString()
+                } else if (testcase.skipped.size() > 0) {
+                    testCase.status = 'SKIPPED'
+                }
+                
+                testCases.add(testCase)
+            }
+        } else {
+            // 如果找不到 XML，尝试从 TestNG results 文件读取
+            def testngResultsFile = 'target/surefire-reports/testng-results.xml'
+            if (fileExists(testngResultsFile)) {
+                def xmlContent = readFile(testngResultsFile)
+                def xml = new XmlSlurper().parseText(xmlContent)
+                
+                // TestNG results 格式
+                xml.suite.test.class.testmethod.each { method ->
+                    def testCase = [
+                        name: method.@name.toString(),
+                        className: method.parent().@name.toString(),
+                        time: (method.@duration-ms.toDouble() / 1000).toString() + 's',
+                        status: method.@status.toString().toUpperCase()
+                    ]
+                    testCases.add(testCase)
+                    
+                    if (testCase.status == 'PASS') {
+                        passedTests++
+                    } else if (testCase.status == 'FAIL') {
+                        failedTests++
+                    } else {
+                        skippedTests++
+                    }
+                }
+                totalTests = testCases.size()
+            }
+        }
+    } catch (Exception e) {
+        echo "解析测试报告时出错: ${e.message}"
+        // 如果解析失败，尝试从 JUnit 报告读取基本信息
+        try {
+            def junitXmlFiles = sh(
+                script: 'find target/surefire-reports -name "TEST-*.xml" -type f | head -1',
+                returnStdout: true
+            ).trim()
+            
+            if (junitXmlFiles) {
+                def xmlContent = readFile(junitXmlFiles)
+                def xml = new XmlSlurper().parseText(xmlContent)
+                
+                totalTests = xml.testsuite.@tests.toInteger() ?: 0
+                passedTests = totalTests - (xml.testsuite.@failures.toInteger() ?: 0) - (xml.testsuite.@errors.toInteger() ?: 0)
+                failedTests = (xml.testsuite.@failures.toInteger() ?: 0) + (xml.testsuite.@errors.toInteger() ?: 0)
+                
+                xml.testsuite.testcase.each { testcase ->
+                    def testCase = [
+                        name: testcase.@name.toString(),
+                        className: testcase.@classname.toString(),
+                        time: testcase.@time.toString(),
+                        status: testcase.failure.size() > 0 || testcase.error.size() > 0 ? 'FAILED' : 'PASSED'
+                    ]
+                    testCases.add(testCase)
+                }
+            }
+        } catch (Exception e2) {
+            echo "从 JUnit 报告读取也失败: ${e2.message}"
+        }
+    }
+    
+    return [
+        total: totalTests,
+        passed: passedTests,
+        failed: failedTests,
+        skipped: skippedTests,
+        testCases: testCases
+    ]
+}
+
+// 生成邮件内容
+def generateEmailBody(testResults) {
+    def buildUrl = "${env.BUILD_URL}"
+    def jobUrl = "${env.JOB_URL}"
+    def triggerUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 
+                     currentBuild.getBuildCauses('hudson.model.Cause$UserCause')[0]?.userId ?: 
+                     '系统自动触发'
+    
+    def html = """
+    <html>
+    <head>
+        <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .header { background-color: #4CAF50; color: white; padding: 20px; border-radius: 5px; }
+            .content { padding: 20px; }
+            .section { margin: 20px 0; padding: 15px; background-color: #f9f9f9; border-left: 4px solid #4CAF50; }
+            .section h3 { margin-top: 0; color: #4CAF50; }
+            table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+            th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+            th { background-color: #4CAF50; color: white; }
+            tr:hover { background-color: #f5f5f5; }
+            .passed { color: #4CAF50; font-weight: bold; }
+            .failed { color: #f44336; font-weight: bold; }
+            .skipped { color: #ff9800; font-weight: bold; }
+            .info { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin: 10px 0; }
+            .link { color: #2196F3; text-decoration: none; }
+            .link:hover { text-decoration: underline; }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h2>✅ TestNG 测试执行成功</h2>
+            <p>项目: ${env.JOB_NAME}</p>
+        </div>
+        
+        <div class="content">
+            <div class="section">
+                <h3>📋 构建信息</h3>
+                <div class="info">
+                    <p><strong>构建编号:</strong> #${env.BUILD_NUMBER}</p>
+                    <p><strong>触发用户:</strong> ${triggerUser}</p>
+                    <p><strong>构建链接:</strong> <a href="${buildUrl}" class="link">${buildUrl}</a></p>
+                    <p><strong>作业链接:</strong> <a href="${jobUrl}" class="link">${jobUrl}</a></p>
+                    <p><strong>构建时间:</strong> ${new Date().format("yyyy-MM-dd HH:mm:ss")}</p>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h3>📊 测试摘要</h3>
+                <table>
+                    <tr>
+                        <th>总测试数</th>
+                        <th>通过</th>
+                        <th>失败</th>
+                        <th>跳过</th>
+                        <th>通过率</th>
+                    </tr>
+                    <tr>
+                        <td>${testResults.total}</td>
+                        <td class="passed">${testResults.passed}</td>
+                        <td class="failed">${testResults.failed}</td>
+                        <td class="skipped">${testResults.skipped}</td>
+                        <td>${testResults.total > 0 ? String.format("%.1f", (testResults.passed / testResults.total) * 100) : 0}%</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div class="section">
+                <h3>📝 测试用例详情</h3>
+                <p>共执行 <strong>${testResults.testCases.size()}</strong> 个测试用例：</p>
+                <table>
+                    <tr>
+                        <th>序号</th>
+                        <th>测试用例名称</th>
+                        <th>类名</th>
+                        <th>执行时间</th>
+                        <th>执行结果</th>
+                    </tr>
+    """
+    
+    testResults.testCases.eachWithIndex { testCase, index ->
+        def statusClass = testCase.status == 'PASSED' || testCase.status == 'PASS' ? 'passed' : 
+                        (testCase.status == 'FAILED' || testCase.status == 'FAIL' ? 'failed' : 'skipped')
+        def statusText = testCase.status == 'PASSED' || testCase.status == 'PASS' ? '✅ 通过' : 
+                        (testCase.status == 'FAILED' || testCase.status == 'FAIL' ? '❌ 失败' : '⏭️ 跳过')
+        
+        html += """
+                    <tr>
+                        <td>${index + 1}</td>
+                        <td>${testCase.name}</td>
+                        <td>${testCase.className}</td>
+                        <td>${testCase.time}</td>
+                        <td class="${statusClass}">${statusText}</td>
+                    </tr>
+        """
+    }
+    
+    html += """
+                </table>
+            </div>
+            
+            <div class="section">
+                <h3>🔗 相关链接</h3>
+                <p><a href="${buildUrl}" class="link">查看构建详情</a></p>
+                <p><a href="${buildUrl}testReport/" class="link">查看测试报告</a></p>
+                <p><a href="${jobUrl}" class="link">查看作业页面</a></p>
+            </div>
+            
+            <div style="margin-top: 30px; padding: 15px; background-color: #f0f0f0; border-radius: 5px; text-align: center; color: #666;">
+                <p>此邮件由 Jenkins 自动发送，请勿回复。</p>
+                <p>构建时间: ${new Date().format("yyyy-MM-dd HH:mm:ss")}</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
+}
+
 pipeline {
     agent any
     
@@ -180,13 +415,21 @@ pipeline {
             }
         }
         success {
-            echo '🎉 Pipeline 执行成功！'
-            // 可以在这里添加通知，如发送邮件、Slack通知等
-            // emailext (
-            //     subject: "✅ TestNG 测试通过: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
-            //     body: "所有测试用例都已通过。",
-            //     to: "your-email@example.com"
-            // )
+            script {
+                echo '🎉 Pipeline 执行成功！'
+                
+                // 解析测试报告并生成邮件内容
+                def testResults = parseTestNGResults()
+                def emailBody = generateEmailBody(testResults)
+                
+                // 发送邮件
+                emailext (
+                    subject: "✅ TestNG 测试通过: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}",
+                    body: emailBody,
+                    to: "605402932@qq.com",
+                    mimeType: 'text/html'
+                )
+            }
         }
         failure {
             echo '💥 Pipeline 执行失败！'
