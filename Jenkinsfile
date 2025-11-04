@@ -128,25 +128,28 @@ pipeline {
             }
             post {
                 always {
-                    // 发布测试报告
-                    publishTestResults testResultsPattern: 'target/surefire-reports/*.xml'
-                    
-                    // 发布 TestNG HTML 报告（需要安装 HTML Publisher Plugin）
-                    try {
-                        publishHTML([
-                            reportDir: 'target/surefire-reports',
-                            reportFiles: 'index.html',
-                            reportName: 'TestNG 测试报告',
-                            keepAll: true,
-                            alwaysLinkToLastBuild: true,
-                            allowMissing: false
-                        ])
-                    } catch (Exception e) {
-                        echo "HTML Publisher Plugin 未安装或配置错误，跳过 HTML 报告发布: ${e.message}"
+                    script {
+                        // 发布测试报告（使用 junit 步骤，Jenkins 内置支持）
+                        junit 'target/surefire-reports/*.xml'
+                        
+                        // 发布 TestNG HTML 报告（需要安装 HTML Publisher Plugin）
+                        // 如果插件未安装，此行会失败，但不会影响其他步骤
+                        try {
+                            publishHTML([
+                                reportDir: 'target/surefire-reports',
+                                reportFiles: 'index.html',
+                                reportName: 'TestNG 测试报告',
+                                keepAll: true,
+                                alwaysLinkToLastBuild: true,
+                                allowMissing: false
+                            ])
+                        } catch (Exception e) {
+                            echo "HTML Publisher Plugin 未安装或配置错误，跳过 HTML 报告发布: ${e.message}"
+                        }
+                        
+                        // 归档测试报告
+                        archiveArtifacts artifacts: 'target/surefire-reports/**/*', fingerprint: true
                     }
-                    
-                    // 归档测试报告
-                    archiveArtifacts artifacts: 'target/surefire-reports/**/*', fingerprint: true
                 }
                 success {
                     echo '✅ 所有测试通过！'
