@@ -1,4 +1,4 @@
-// 定义解析测试结果的函数
+// 定义解析测试结果的函数（使用 shell 脚本避免 Groovy 沙箱限制）
 def parseTestNGResults() {
     def testCases = []
     def totalTests = 0
@@ -7,101 +7,168 @@ def parseTestNGResults() {
     def skippedTests = 0
     
     try {
-        // 查找 TestNG XML 报告文件
-        def testngXmlFiles = sh(
-            script: 'find target/surefire-reports -name "*.xml" -type f | grep -v testng-results.xml | head -1',
+        // 使用 shell 脚本解析 XML 文件
+        def parseScript = '''
+            #!/bin/bash
+            # 查找 JUnit 格式的 XML 报告（TestNG 也会生成这种格式）
+            XML_FILE=$(find target/surefire-reports -name "TEST-*.xml" -type f | head -1)
+            
+            if [ -z "$XML_FILE" ]; then
+                # 尝试查找其他 XML 文件
+                XML_FILE=$(find target/surefire-reports -name "*.xml" -type f | grep -v testng-results.xml | head -1)
+            fi
+            
+            if [ -n "$XML_FILE" ] && [ -f "$XML_FILE" ]; then
+                # 使用 sed 和 grep 提取信息
+                echo "XML_FILE:$XML_FILE"
+                
+                # 提取测试套件信息
+                TESTS=$(grep -oP 'tests="\\K[^"]+' "$XML_FILE" | head -1 || echo "0")
+                FAILURES=$(grep -oP 'failures="\\K[^"]+' "$XML_FILE" | head -1 || echo "0")
+                ERRORS=$(grep -oP 'errors="\\K[^"]+' "$XML_FILE" | head -1 || echo "0")
+                SKIPPED=$(grep -oP 'skipped="\\K[^"]+' "$XML_FILE" | head -1 || echo "0")
+                
+                echo "TESTS:$TESTS"
+                echo "FAILURES:$FAILURES"
+                echo "ERRORS:$ERRORS"
+                echo "SKIPPED:$SKIPPED"
+                
+                # 计算通过的测试数
+                PASSED=$((TESTS - FAILURES - ERRORS - SKIPPED))
+                echo "PASSED:$PASSED"
+                
+                # 提取测试用例信息
+                TEST_CASES=$(grep -c '<testcase' "$XML_FILE" || echo "0")
+                echo "TEST_CASES_COUNT:$TEST_CASES"
+                
+                # 提取每个测试用例的详细信息
+                INDEX=1
+                grep '<testcase' "$XML_FILE" | while read -r line; do
+                    # 提取测试用例名称
+                    NAME=$(echo "$line" | grep -oP 'name="\\K[^"]+' | head -1 || echo "Unknown")
+                    # 提取类名
+                    CLASS=$(echo "$line" | grep -oP 'classname="\\K[^"]+' | head -1 || echo "Unknown")
+                    # 提取执行时间
+                    TIME=$(echo "$line" | grep -oP 'time="\\K[^"]+' | head -1 || echo "0")
+                    # 判断状态
+                    if echo "$line" | grep -q '<failure'; then
+                        STATUS="FAILED"
+                    elif echo "$line" | grep -q '<error'; then
+                        STATUS="FAILED"
+                    elif echo "$line" | grep -q '<skipped'; then
+                        STATUS="SKIPPED"
+                    else
+                        STATUS="PASSED"
+                    fi
+                    
+                    echo "TEST_CASE_${INDEX}:${NAME}|${CLASS}|${TIME}|${STATUS}"
+                    INDEX=$((INDEX + 1))
+                done
+            else
+                echo "XML_FILE:NOT_FOUND"
+            fi
+        '''
+        
+        def parseResult = sh(
+            script: parseScript,
             returnStdout: true
         ).trim()
         
-        if (testngXmlFiles) {
-            def xmlContent = readFile(testngXmlFiles)
-            
-            // 使用 Groovy XML 解析
-            def xml = new XmlSlurper().parseText(xmlContent)
-            
-            // 解析测试套件信息
-            totalTests = xml.testsuite.@tests.toInteger() ?: 0
-            passedTests = xml.testsuite.@passed.toInteger() ?: 0
-            failedTests = xml.testsuite.@failures.toInteger() ?: 0
-            skippedTests = xml.testsuite.@skipped.toInteger() ?: 0
-            
-            // 解析测试用例
-            xml.testsuite.testcase.each { testcase ->
-                def testCase = [
-                    name: testcase.@name.toString(),
-                    className: testcase.@classname.toString(),
-                    time: testcase.@time.toString(),
-                    status: 'PASSED'
-                ]
-                
-                // 检查是否有失败或跳过
-                if (testcase.failure.size() > 0) {
-                    testCase.status = 'FAILED'
-                    testCase.error = testcase.failure[0].@message.toString()
-                } else if (testcase.skipped.size() > 0) {
-                    testCase.status = 'SKIPPED'
+        // 解析脚本输出
+        def lines = parseResult.split('\n')
+        def currentTestCaseIndex = 0
+        
+        lines.each { line ->
+            if (line.startsWith('XML_FILE:')) {
+                def filePath = line.substring(9)
+                if (filePath == 'NOT_FOUND') {
+                    echo "未找到测试报告 XML 文件"
+                    return
                 }
-                
-                testCases.add(testCase)
-            }
-        } else {
-            // 如果找不到 XML，尝试从 TestNG results 文件读取
-            def testngResultsFile = 'target/surefire-reports/testng-results.xml'
-            if (fileExists(testngResultsFile)) {
-                def xmlContent = readFile(testngResultsFile)
-                def xml = new XmlSlurper().parseText(xmlContent)
-                
-                // TestNG results 格式
-                xml.suite.test.class.testmethod.each { method ->
+            } else if (line.startsWith('TESTS:')) {
+                totalTests = line.substring(6).toInteger() ?: 0
+            } else if (line.startsWith('PASSED:')) {
+                passedTests = line.substring(7).toInteger() ?: 0
+            } else if (line.startsWith('FAILURES:')) {
+                failedTests = line.substring(9).toInteger() ?: 0
+            } else if (line.startsWith('ERRORS:')) {
+                def errors = line.substring(7).toInteger() ?: 0
+                failedTests += errors
+            } else if (line.startsWith('SKIPPED:')) {
+                skippedTests = line.substring(8).toInteger() ?: 0
+            } else if (line.startsWith('TEST_CASE_')) {
+                def parts = line.substring(line.indexOf(':') + 1).split('\\|')
+                if (parts.length >= 4) {
                     def testCase = [
-                        name: method.@name.toString(),
-                        className: method.parent().@name.toString(),
-                        time: (method.@duration-ms.toDouble() / 1000).toString() + 's',
-                        status: method.@status.toString().toUpperCase()
+                        name: parts[0],
+                        className: parts[1],
+                        time: parts[2] + 's',
+                        status: parts[3]
                     ]
                     testCases.add(testCase)
-                    
-                    if (testCase.status == 'PASS') {
-                        passedTests++
-                    } else if (testCase.status == 'FAIL') {
-                        failedTests++
-                    } else {
-                        skippedTests++
+                }
+            }
+        }
+        
+        // 如果解析失败，尝试从 TestNG results 文件读取
+        if (totalTests == 0 && testCases.size() == 0) {
+            def testngResultsFile = 'target/surefire-reports/testng-results.xml'
+            if (fileExists(testngResultsFile)) {
+                def testngParseScript = '''
+                    #!/bin/bash
+                    FILE="target/surefire-reports/testng-results.xml"
+                    if [ -f "$FILE" ]; then
+                        # 提取测试方法信息
+                        INDEX=1
+                        grep '<test-method' "$FILE" | while read -r line; do
+                            NAME=$(echo "$line" | grep -oP 'name="\\K[^"]+' | head -1 || echo "Unknown")
+                            CLASS=$(echo "$line" | grep -oP 'class="\\K[^"]+' | head -1 || echo "Unknown")
+                            STATUS=$(echo "$line" | grep -oP 'status="\\K[^"]+' | head -1 || echo "PASS")
+                            DURATION=$(echo "$line" | grep -oP 'duration-ms="\\K[^"]+' | head -1 || echo "0")
+                            TIME=$(echo "scale=3; $DURATION / 1000" | bc | xargs printf "%.3f")
+                            
+                            echo "TEST_CASE_${INDEX}:${NAME}|${CLASS}|${TIME}|${STATUS}"
+                            INDEX=$((INDEX + 1))
+                        done
+                    fi
+                '''
+                
+                def testngResult = sh(
+                    script: testngParseScript,
+                    returnStdout: true
+                ).trim()
+                
+                def testngLines = testngResult.split('\n')
+                testngLines.each { line ->
+                    if (line.startsWith('TEST_CASE_')) {
+                        def parts = line.substring(line.indexOf(':') + 1).split('\\|')
+                        if (parts.length >= 4) {
+                            def status = parts[3].toUpperCase()
+                            def testCase = [
+                                name: parts[0],
+                                className: parts[1],
+                                time: parts[2] + 's',
+                                status: status == 'PASS' ? 'PASSED' : (status == 'FAIL' ? 'FAILED' : 'SKIPPED')
+                            ]
+                            testCases.add(testCase)
+                            
+                            if (testCase.status == 'PASSED') {
+                                passedTests++
+                            } else if (testCase.status == 'FAILED') {
+                                failedTests++
+                            } else {
+                                skippedTests++
+                            }
+                        }
                     }
                 }
                 totalTests = testCases.size()
             }
         }
+        
     } catch (Exception e) {
         echo "解析测试报告时出错: ${e.message}"
-        // 如果解析失败，尝试从 JUnit 报告读取基本信息
-        try {
-            def junitXmlFiles = sh(
-                script: 'find target/surefire-reports -name "TEST-*.xml" -type f | head -1',
-                returnStdout: true
-            ).trim()
-            
-            if (junitXmlFiles) {
-                def xmlContent = readFile(junitXmlFiles)
-                def xml = new XmlSlurper().parseText(xmlContent)
-                
-                totalTests = xml.testsuite.@tests.toInteger() ?: 0
-                passedTests = totalTests - (xml.testsuite.@failures.toInteger() ?: 0) - (xml.testsuite.@errors.toInteger() ?: 0)
-                failedTests = (xml.testsuite.@failures.toInteger() ?: 0) + (xml.testsuite.@errors.toInteger() ?: 0)
-                
-                xml.testsuite.testcase.each { testcase ->
-                    def testCase = [
-                        name: testcase.@name.toString(),
-                        className: testcase.@classname.toString(),
-                        time: testcase.@time.toString(),
-                        status: testcase.failure.size() > 0 || testcase.error.size() > 0 ? 'FAILED' : 'PASSED'
-                    ]
-                    testCases.add(testCase)
-                }
-            }
-        } catch (Exception e2) {
-            echo "从 JUnit 报告读取也失败: ${e2.message}"
-        }
+        echo "堆栈跟踪: ${e.getStackTrace().join('\\n')}"
     }
     
     return [
