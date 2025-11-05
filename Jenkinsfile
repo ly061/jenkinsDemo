@@ -1,11 +1,11 @@
 pipeline {
     agent any
     
-    tools {
-        // 根据你的Jenkins中配置的工具名称调整
-        maven 'Maven-3.9.9'  // 修改为你的 Maven 工具名称
-        jdk 'JDK-17'          // 修改为你的 JDK 工具名称
-    }
+    // tools {
+    //     // 根据你的Jenkins中配置的工具名称调整
+    //     maven 'Maven-3.9.9'  // 修改为你的 Maven 工具名称
+    //     jdk 'JDK-17'          // 修改为你的 JDK 工具名称
+    // }
     
     options {
         // 保留最近10次构建的构建历史
