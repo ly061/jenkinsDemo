@@ -2,29 +2,33 @@ pipeline {
     agent any
     
     // tools {
-    //     // 根据你的Jenkins中配置的工具名称调整
-    //     maven 'Maven-3.9.9'  // 修改为你的 Maven 工具名称
-    //     jdk 'JDK-17'          // 修改为你的 JDK 工具名称
+    //     maven 'Maven-3.9.9'  // 请根据你的Jenkins配置调整
+    //     jdk 'JDK-17'          // 请根据你的Jenkins配置调整
     // }
     
     options {
-        // 保留最近10次构建的构建历史
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        // 超时时间设置为30分钟
         timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+    }
+    
+    environment {
+        EMAIL_RECIPIENTS = '17381915093@163.com'
+        PROJECT_NAME = 'WEAZL TestNG 自动化测试'
     }
     
     stages {
-        stage('Checkout') {
+        stage('环境检查') {
             steps {
                 script {
-                    echo '=== 检出代码 ==='
-                    checkout scm
+                    echo '=== 检查环境 ==='
+                    sh 'java -version'
+                    sh 'mvn -version'
                 }
             }
         }
         
-        stage('Clean') {
+        stage('清理') {
             steps {
                 script {
                     echo '=== 清理构建目录 ==='
@@ -33,7 +37,7 @@ pipeline {
             }
         }
         
-        stage('Compile') {
+        stage('编译') {
             steps {
                 script {
                     echo '=== 编译项目 ==='
@@ -42,32 +46,124 @@ pipeline {
             }
         }
         
-        stage('Test') {
+        stage('执行测试') {
             steps {
                 script {
                     echo '=== 运行 TestNG 测试 ==='
-                    sh 'mvn test'
+                    // 即使测试失败也继续执行
+                    sh 'mvn test || true'
                 }
             }
             post {
                 always {
-                    // 发布测试报告
-                    publishTestResults testResultsPattern: 'target/surefire-reports/*.xml'
-                    
-                    // 发布 TestNG HTML 报告
-                    try {
-                        publishHTML([
-                            reportDir: 'target/surefire-reports',
-                            reportFiles: 'index.html',
-                            reportName: 'TestNG 测试报告',
-                            keepAll: true
-                        ])
-                    } catch (Exception e) {
-                        echo "HTML Publisher Plugin 未安装，跳过 HTML 报告发布: ${e.message}"
+                    script {
+                        // 发布JUnit测试结果
+                        junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
+                        
+                        // 发布HTML报告（如果有HTML Publisher插件）
+                        try {
+                            publishHTML([
+                                reportDir: 'target/surefire-reports',
+                                reportFiles: 'index.html',
+                                reportName: 'TestNG HTML报告',
+                                alwaysLinkToLastBuild: true,
+                                allowMissing: true,
+                                keepAll: true
+                            ])
+                        } catch (Exception e) {
+                            echo "HTML Publisher插件未安装，跳过HTML报告发布"
+                        }
+                        
+                        // 归档测试报告
+                        archiveArtifacts artifacts: 'target/surefire-reports/**/*', allowEmptyArchive: true
                     }
+                }
+            }
+        }
+        
+        stage('生成测试报告') {
+            steps {
+                script {
+                    echo '=== 生成详细测试报告 ==='
+                    // 创建解析TestNG结果的脚本
+                    writeFile file: 'parse_testng_results.groovy', text: '''
+import groovy.xml.XmlSlurper
+import java.text.SimpleDateFormat
+
+def parseTestNGResults() {
+    def reportData = [
+        totalTests: 0,
+        passed: 0,
+        failed: 0,
+        skipped: 0,
+        totalTime: 0,
+        testCases: []
+    ]
+    
+    try {
+        // 查找所有XML测试结果文件
+        def xmlFiles = new File('target/surefire-reports').listFiles().findAll { 
+            it.name.endsWith('.xml') && it.name.startsWith('TEST-')
+        }
+        
+        xmlFiles.each { xmlFile ->
+            def xml = new XmlSlurper().parse(xmlFile)
+            
+            xml.testcase.each { testcase ->
+                def testInfo = [
+                    id: testcase.@name.text(),
+                    className: testcase.@classname.text(),
+                    name: testcase.@name.text(),
+                    time: testcase.@time.text(),
+                    status: 'PASSED'
+                ]
+                
+                // 检查是否失败
+                if (testcase.failure.size() > 0) {
+                    testInfo.status = 'FAILED'
+                    testInfo.errorMessage = testcase.failure.@message.text()
+                    testInfo.errorDetail = testcase.failure.text()
+                    reportData.failed++
+                }
+                // 检查是否跳过
+                else if (testcase.skipped.size() > 0) {
+                    testInfo.status = 'SKIPPED'
+                    testInfo.skipReason = testcase.skipped.@message.text()
+                    reportData.skipped++
+                }
+                else {
+                    reportData.passed++
+                }
+                
+                reportData.testCases << testInfo
+                reportData.totalTests++
+                reportData.totalTime += (testcase.@time.text() as Double)
+            }
+        }
+    } catch (Exception e) {
+        println "解析测试结果时出错: ${e.message}"
+        e.printStackTrace()
+    }
+    
+    return reportData
+}
+
+// 执行解析
+def results = parseTestNGResults()
+
+// 保存为JSON供后续使用
+def jsonOutput = new groovy.json.JsonBuilder(results).toPrettyString()
+new File('test-results.json').text = jsonOutput
+
+println "测试结果已保存到 test-results.json"
+return results
+'''
                     
-                    // 归档测试报告
-                    archiveArtifacts artifacts: 'target/surefire-reports/**/*', fingerprint: true
+                    // 执行解析脚本
+                    def results = load 'parse_testng_results.groovy'
+                    
+                    // 保存测试结果供邮件使用
+                    env.TEST_RESULTS = groovy.json.JsonOutput.toJson(results)
                 }
             }
         }
@@ -76,343 +172,312 @@ pipeline {
     post {
         always {
             script {
-                echo '=== 解析测试结果并发送邮件 ==='
-                
-                // 解析TestNG XML报告并生成邮件内容
-                def emailBody = generateEmailBody()
-                
-                // 发送邮件
-                emailext(
-                    subject: "[Jenkins] ${env.JOB_NAME} - Build #${env.BUILD_NUMBER} - ${currentBuild.currentResult}",
-                    body: emailBody,
-                    to: '17381915093@163.com',
-                    mimeType: 'text/html',
-                    attachLog: false
-                )
+                echo '=== 发送测试报告邮件 ==='
+                sendDetailedEmailReport()
             }
         }
     }
 }
 
-/**
- * 生成邮件内容
- * 包含构建信息和测试用例详细信息
- */
-def generateEmailBody() {
-    def buildInfo = getBuildInfo()
-    def testSummary = getTestSummary()
-    def testCases = getTestCasesDetails()
-    
-    def html = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 900px; margin: 0 auto; padding: 20px; }
-            h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
-            h2 { color: #34495e; margin-top: 30px; border-left: 4px solid #3498db; padding-left: 10px; }
-            .info-box { background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 5px; padding: 15px; margin: 15px 0; }
-            .info-row { margin: 8px 0; }
-            .info-label { font-weight: bold; color: #495057; display: inline-block; width: 150px; }
-            .summary-box { background-color: #e7f3ff; border-left: 4px solid #2196F3; padding: 15px; margin: 15px 0; }
-            .summary-item { margin: 5px 0; font-size: 16px; }
-            .success { color: #28a745; font-weight: bold; }
-            .failure { color: #dc3545; font-weight: bold; }
-            .skipped { color: #ffc107; font-weight: bold; }
-            table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-            th { background-color: #3498db; color: white; padding: 12px; text-align: left; }
-            td { padding: 10px; border-bottom: 1px solid #ddd; }
-            tr:hover { background-color: #f5f5f5; }
-            .status-pass { color: #28a745; font-weight: bold; }
-            .status-fail { color: #dc3545; font-weight: bold; }
-            .status-skip { color: #ffc107; font-weight: bold; }
-            .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; color: #6c757d; font-size: 12px; text-align: center; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>📧 Jenkins 测试报告</h1>
-            
-            <h2>📋 构建信息</h2>
-            <div class="info-box">
-                <div class="info-row"><span class="info-label">构建编号:</span> #${buildInfo.buildNumber}</div>
-                <div class="info-row"><span class="info-label">构建状态:</span> <span class="${buildInfo.status == 'SUCCESS' ? 'success' : 'failure'}">${buildInfo.status}</span></div>
-                <div class="info-row"><span class="info-label">触发用户:</span> ${buildInfo.triggerUser}</div>
-                <div class="info-row"><span class="info-label">构建时间:</span> ${buildInfo.buildTime}</div>
-                <div class="info-row"><span class="info-label">构建时长:</span> ${buildInfo.duration}</div>
-                <div class="info-row"><span class="info-label">构建链接:</span> <a href="${buildInfo.buildUrl}">${buildInfo.buildUrl}</a></div>
-                <div class="info-row"><span class="info-label">作业链接:</span> <a href="${buildInfo.jobUrl}">${buildInfo.jobUrl}</a></div>
-                <div class="info-row"><span class="info-label">Git 分支:</span> ${buildInfo.gitBranch}</div>
-                <div class="info-row"><span class="info-label">Git 提交:</span> ${buildInfo.gitCommit}</div>
-            </div>
-            
-            <h2>📊 测试摘要</h2>
-            <div class="summary-box">
-                <div class="summary-item"><strong>总测试数:</strong> ${testSummary.total}</div>
-                <div class="summary-item"><span class="success">✅ 通过:</span> ${testSummary.passed}</div>
-                <div class="summary-item"><span class="failure">❌ 失败:</span> ${testSummary.failed}</div>
-                <div class="summary-item"><span class="skipped">⏭️ 跳过:</span> ${testSummary.skipped}</div>
-                <div class="summary-item"><strong>通过率:</strong> ${testSummary.passRate}%</div>
-            </div>
-            
-            <h2>📝 测试用例详细信息</h2>
-            ${testCases.table}
-            
-            <div class="footer">
-                <p>此邮件由 Jenkins 自动发送，请勿回复。</p>
-                <p>生成时间: ${new Date().format("yyyy-MM-dd HH:mm:ss")}</p>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-    
-    return html
-}
-
-/**
- * 获取构建信息
- */
-def getBuildInfo() {
-    def buildNumber = env.BUILD_NUMBER ?: 'N/A'
-    def buildStatus = currentBuild.currentResult ?: 'UNKNOWN'
-    def triggerUser = env.BUILD_USER ?: (currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')?.first()?.userId ?: '系统触发')
-    def buildTime = new Date(currentBuild.startTimeInMillis).format("yyyy-MM-dd HH:mm:ss")
-    def duration = currentBuild.durationString ?: 'N/A'
-    def buildUrl = env.BUILD_URL ?: 'N/A'
-    def jobUrl = env.JOB_URL ?: 'N/A'
-    
-    // 获取Git信息
-    def gitBranch = 'N/A'
-    def gitCommit = 'N/A'
+def sendDetailedEmailReport() {
+    // 解析测试结果
+    def testResults = null
     try {
-        gitBranch = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
-        gitCommit = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+        def jsonText = readFile('test-results.json')
+        testResults = new groovy.json.JsonSlurper().parseText(jsonText)
     } catch (Exception e) {
-        echo "无法获取Git信息: ${e.message}"
+        echo "无法读取测试结果: ${e.message}"
+        testResults = [
+            totalTests: 0,
+            passed: 0,
+            failed: 0,
+            skipped: 0,
+            totalTime: 0,
+            testCases: []
+        ]
     }
     
-    return [
-        buildNumber: buildNumber,
-        status: buildStatus,
-        triggerUser: triggerUser,
-        buildTime: buildTime,
-        duration: duration,
-        buildUrl: buildUrl,
-        jobUrl: jobUrl,
-        gitBranch: gitBranch,
-        gitCommit: gitCommit
-    ]
-}
-
-/**
- * 获取测试摘要信息
- */
-def getTestSummary() {
-    def total = 0
-    def passed = 0
-    def failed = 0
-    def skipped = 0
+    // 构建状态
+    def buildStatus = currentBuild.currentResult
+    def buildColor = buildStatus == 'SUCCESS' ? '#28a745' : (buildStatus == 'UNSTABLE' ? '#ffc107' : '#dc3545')
+    def statusEmoji = buildStatus == 'SUCCESS' ? '✅' : (buildStatus == 'UNSTABLE' ? '⚠️' : '❌')
     
-    try {
-        // 读取TestNG XML报告
-        def testngXml = readFile('target/surefire-reports/testng-results.xml')
-        def xml = new XmlParser().parseText(testngXml)
+    // 构建详细的测试用例表格
+    def testCasesTableRows = ''
+    testResults.testCases.eachWithIndex { testCase, index ->
+        def statusIcon = testCase.status == 'PASSED' ? '✅' : (testCase.status == 'SKIPPED' ? '⏭️' : '❌')
+        def statusColor = testCase.status == 'PASSED' ? '#28a745' : (testCase.status == 'SKIPPED' ? '#6c757d' : '#dc3545')
+        def executionTime = String.format("%.3f", testCase.time as Double)
         
-        // 解析统计信息
-        def suite = xml.suite[0]
-        if (suite) {
-            total = (suite.'@total-tests' ?: '0').toInteger()
-            passed = (suite.'@passed' ?: '0').toInteger()
-            failed = (suite.'@failed' ?: '0').toInteger()
-            skipped = (suite.'@skipped' ?: '0').toInteger()
+        def errorInfo = ''
+        if (testCase.status == 'FAILED' && testCase.errorMessage) {
+            errorInfo = """<br/><small style="color: #dc3545;">错误: ${testCase.errorMessage}</small>"""
+        } else if (testCase.status == 'SKIPPED' && testCase.skipReason) {
+            errorInfo = """<br/><small style="color: #6c757d;">跳过原因: ${testCase.skipReason}</small>"""
         }
-    } catch (Exception e) {
-        echo "解析测试摘要失败: ${e.message}"
-        // 尝试从JUnit报告解析
-        try {
-            def junitFiles = sh(script: 'find target/surefire-reports -name "*.xml" -type f', returnStdout: true).trim()
-            if (junitFiles) {
-                def lines = junitFiles.split('\n')
-                for (def file : lines) {
-                    try {
-                        def xmlContent = readFile(file)
-                        def xml = new XmlParser().parseText(xmlContent)
-                        xml.testsuite.each { suite ->
-                            total += (suite.'@tests' ?: '0').toInteger()
-                            passed += (suite.'@passed' ?: '0').toInteger()
-                            failed += (suite.'@failures' ?: '0').toInteger()
-                            skipped += (suite.'@skipped' ?: '0').toInteger()
-                        }
-                    } catch (Exception ex) {
-                        echo "解析文件 ${file} 失败: ${ex.message}"
-                    }
-                }
-            }
-        } catch (Exception ex) {
-            echo "无法读取测试报告: ${ex.message}"
-        }
-    }
-    
-    def passRate = total > 0 ? String.format("%.2f", (passed * 100.0 / total)) : "0.00"
-    
-    return [
-        total: total,
-        passed: passed,
-        failed: failed,
-        skipped: skipped,
-        passRate: passRate
-    ]
-}
-
-/**
- * 获取测试用例详细信息
- */
-def getTestCasesDetails() {
-    def testCases = []
-    
-    try {
-        // 读取TestNG XML报告
-        def testngXml = readFile('target/surefire-reports/testng-results.xml')
-        def xml = new XmlParser().parseText(testngXml)
         
-        def caseId = 1
-        xml.suite.test.class.testMethod.each { method ->
-            def className = method.parent().'@name' ?: 'N/A'
-            def methodName = method.'@name' ?: 'N/A'
-            def status = method.'@status' ?: 'UNKNOWN'
-            def duration = method.'@duration-ms' ?: '0'
-            def durationSeconds = String.format("%.3f", (duration.toDouble() / 1000))
-            
-            // 获取描述信息
-            def description = method.'@description' ?: ''
-            if (!description && methodName.contains('_')) {
-                description = methodName.replace('_', ' ')
-            }
-            
-            testCases.add([
-                id: caseId++,
-                name: methodName,
-                className: className,
-                description: description,
-                duration: durationSeconds + 's',
-                status: status
-            ])
-        }
-    } catch (Exception e) {
-        echo "解析TestNG报告失败，尝试解析JUnit报告: ${e.message}"
-        
-        // 尝试从JUnit报告解析
-        try {
-            def junitFiles = sh(script: 'find target/surefire-reports -name "TEST-*.xml" -type f', returnStdout: true).trim()
-            if (junitFiles) {
-                def caseId = 1
-                def lines = junitFiles.split('\n')
-                for (def file : lines) {
-                    try {
-                        def xmlContent = readFile(file)
-                        def xml = new XmlParser().parseText(xmlContent)
-                        xml.testsuite.testcase.each { testcase ->
-                            def className = testcase.'@classname' ?: 'N/A'
-                            def methodName = testcase.'@name' ?: 'N/A'
-                            def duration = testcase.'@time' ?: '0'
-                            
-                            // 判断状态
-                            def status = 'PASS'
-                            if (testcase.failure.size() > 0) {
-                                status = 'FAIL'
-                            } else if (testcase.skipped.size() > 0) {
-                                status = 'SKIP'
-                            }
-                            
-                            testCases.add([
-                                id: caseId++,
-                                name: methodName,
-                                className: className,
-                                description: methodName.replace('_', ' '),
-                                duration: duration + 's',
-                                status: status
-                            ])
-                        }
-                    } catch (Exception ex) {
-                        echo "解析文件 ${file} 失败: ${ex.message}"
-                    }
-                }
-            }
-        } catch (Exception ex) {
-            echo "无法读取测试报告: ${ex.message}"
-            // 如果无法解析，至少返回一个提示
-            testCases.add([
-                id: 1,
-                name: '无法解析测试报告',
-                className: 'N/A',
-                description: '请检查测试报告文件是否存在',
-                duration: 'N/A',
-                status: 'UNKNOWN'
-            ])
-        }
-    }
-    
-    // 生成HTML表格
-    def tableHtml = """
-    <table>
-        <thead>
+        testCasesTableRows += """
             <tr>
-                <th>序号</th>
-                <th>测试用例ID</th>
-                <th>测试用例名称</th>
-                <th>类名</th>
-                <th>描述</th>
-                <th>执行时间</th>
-                <th>执行结果</th>
-            </tr>
-        </thead>
-        <tbody>
-    """
-    
-    if (testCases.isEmpty()) {
-        tableHtml += """
-            <tr>
-                <td colspan="7" style="text-align: center; color: #6c757d;">暂无测试用例数据</td>
+                <td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">${index + 1}</td>
+                <td style="padding: 12px; border: 1px solid #dee2e6;"><code>${testCase.id}</code></td>
+                <td style="padding: 12px; border: 1px solid #dee2e6;">${testCase.name}${errorInfo}</td>
+                <td style="padding: 12px; border: 1px solid #dee2e6;">${testCase.className}</td>
+                <td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">${executionTime}s</td>
+                <td style="padding: 12px; border: 1px solid #dee2e6; text-align: center;">
+                    <span style="padding: 4px 12px; border-radius: 4px; background-color: ${statusColor}; color: white; font-weight: bold;">
+                        ${statusIcon} ${testCase.status}
+                    </span>
+                </td>
             </tr>
         """
-    } else {
-        testCases.each { testCase ->
-            def statusClass = 'status-pass'
-            def statusText = '✅ 通过'
-            def statusEmoji = '✅'
-            
-            if (testCase.status == 'FAIL' || testCase.status == 'FAILURE') {
-                statusClass = 'status-fail'
-                statusText = '❌ 失败'
-                statusEmoji = '❌'
-            } else if (testCase.status == 'SKIP' || testCase.status == 'SKIPPED') {
-                statusClass = 'status-skip'
-                statusText = '⏭️ 跳过'
-                statusEmoji = '⏭️'
-            }
-            
-            tableHtml += """
-            <tr>
-                <td>${testCase.id}</td>
-                <td>TC-${String.format("%03d", testCase.id)}</td>
-                <td>${testCase.name}</td>
-                <td>${testCase.className}</td>
-                <td>${testCase.description}</td>
-                <td>${testCase.duration}</td>
-                <td class="${statusClass}">${statusText}</td>
-            </tr>
-            """
-        }
     }
     
-    tableHtml += """
-        </tbody>
-    </table>
-    """
+    // 计算总执行时间
+    def totalTimeFormatted = String.format("%.3f", testResults.totalTime)
+    def passRate = testResults.totalTests > 0 ? 
+        String.format("%.2f", (testResults.passed / testResults.totalTests) * 100) : '0.00'
     
-    return [table: tableHtml, cases: testCases]
+    // 构建HTML邮件内容
+    def emailBody = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+        .header {
+            background: linear-gradient(135deg, ${buildColor} 0%, ${buildColor}dd 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px 8px 0 0;
+            margin: -30px -30px 30px -30px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .header p {
+            margin: 10px 0 0 0;
+            opacity: 0.9;
+        }
+        .section {
+            margin-bottom: 30px;
+        }
+        .section h2 {
+            color: #333;
+            border-bottom: 2px solid ${buildColor};
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .info-card {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid ${buildColor};
+        }
+        .info-card .label {
+            font-size: 12px;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+        .info-card .value {
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            text-align: center;
+            padding: 20px;
+            border-radius: 8px;
+            background-color: #f8f9fa;
+        }
+        .stat-card.total { border-top: 4px solid #007bff; }
+        .stat-card.passed { border-top: 4px solid #28a745; }
+        .stat-card.failed { border-top: 4px solid #dc3545; }
+        .stat-card.skipped { border-top: 4px solid #6c757d; }
+        .stat-card .number {
+            font-size: 36px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .stat-card .label {
+            font-size: 14px;
+            color: #6c757d;
+            text-transform: uppercase;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background-color: white;
+        }
+        th {
+            background-color: ${buildColor};
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+        }
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #dee2e6;
+            text-align: center;
+            color: #6c757d;
+            font-size: 12px;
+        }
+        .footer a {
+            color: ${buildColor};
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>${statusEmoji} ${env.PROJECT_NAME}</h1>
+            <p>构建 #${env.BUILD_NUMBER} - ${buildStatus}</p>
+        </div>
+        
+        <div class="section">
+            <h2>📊 构建信息</h2>
+            <div class="info-grid">
+                <div class="info-card">
+                    <div class="label">项目名称</div>
+                    <div class="value">${env.JOB_NAME}</div>
+                </div>
+                <div class="info-card">
+                    <div class="label">构建编号</div>
+                    <div class="value">#${env.BUILD_NUMBER}</div>
+                </div>
+                <div class="info-card">
+                    <div class="label">构建状态</div>
+                    <div class="value" style="color: ${buildColor};">${statusEmoji} ${buildStatus}</div>
+                </div>
+                <div class="info-card">
+                    <div class="label">构建时长</div>
+                    <div class="value">${currentBuild.durationString.replace(' and counting', '')}</div>
+                </div>
+                <div class="info-card">
+                    <div class="label">构建时间</div>
+                    <div class="value">${new Date(currentBuild.startTimeInMillis).format('yyyy-MM-dd HH:mm:ss')}</div>
+                </div>
+                <div class="info-card">
+                    <div class="label">构建节点</div>
+                    <div class="value">${env.NODE_NAME}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>📈 测试统计</h2>
+            <div class="stats-grid">
+                <div class="stat-card total">
+                    <div class="label">总用例数</div>
+                    <div class="number" style="color: #007bff;">${testResults.totalTests}</div>
+                </div>
+                <div class="stat-card passed">
+                    <div class="label">通过</div>
+                    <div class="number" style="color: #28a745;">${testResults.passed}</div>
+                </div>
+                <div class="stat-card failed">
+                    <div class="label">失败</div>
+                    <div class="number" style="color: #dc3545;">${testResults.failed}</div>
+                </div>
+                <div class="stat-card skipped">
+                    <div class="label">跳过</div>
+                    <div class="number" style="color: #6c757d;">${testResults.skipped}</div>
+                </div>
+            </div>
+            
+            <div class="info-grid">
+                <div class="info-card">
+                    <div class="label">总执行时间</div>
+                    <div class="value">${totalTimeFormatted} 秒</div>
+                </div>
+                <div class="info-card">
+                    <div class="label">通过率</div>
+                    <div class="value" style="color: ${testResults.failed > 0 ? '#dc3545' : '#28a745'};">${passRate}%</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>📋 测试用例明细</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="text-align: center; width: 60px;">序号</th>
+                        <th style="width: 200px;">用例ID</th>
+                        <th>用例名称</th>
+                        <th>测试类</th>
+                        <th style="text-align: center; width: 100px;">执行时间</th>
+                        <th style="text-align: center; width: 120px;">执行结果</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${testCasesTableRows ?: '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #6c757d;">暂无测试用例数据</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="footer">
+            <p>
+                <a href="${env.BUILD_URL}">查看完整构建日志</a> | 
+                <a href="${env.BUILD_URL}testReport/">查看测试报告</a> | 
+                <a href="${env.BUILD_URL}console">查看控制台输出</a>
+            </p>
+            <p>此邮件由 Jenkins 自动生成 - ${new Date().format('yyyy-MM-dd HH:mm:ss')}</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+    
+    // 发送邮件
+    try {
+        emailext(
+            to: env.EMAIL_RECIPIENTS,
+            subject: "${statusEmoji} ${env.PROJECT_NAME} - 构建 #${env.BUILD_NUMBER} ${buildStatus}",
+            body: emailBody,
+            mimeType: 'text/html',
+            attachLog: true,
+            compressLog: true,
+            attachmentsPattern: 'target/surefire-reports/*.xml'
+        )
+        echo "✅ 测试报告邮件已发送至 ${env.EMAIL_RECIPIENTS}"
+    } catch (Exception e) {
+        echo "❌ 发送邮件失败: ${e.message}"
+        echo "请确保Jenkins已安装并配置了 Email Extension Plugin"
+        echo "详细信息: https://plugins.jenkins.io/email-ext/"
+    }
 }
 
