@@ -1,6 +1,8 @@
 pipeline {
     agent any
     
+    // 方案1：使用 Jenkins 配置的工具（推荐）
+    // 如果 Jenkins 中已配置 Maven 和 JDK 工具，取消下面的注释并修改工具名称
     // tools {
     //     maven 'Maven-3.9.9'  // 请根据你的Jenkins配置调整
     //     jdk 'JDK-17'          // 请根据你的Jenkins配置调整
@@ -15,6 +17,10 @@ pipeline {
     environment {
         EMAIL_RECIPIENTS = '17381915093@163.com'
         PROJECT_NAME = 'WEAZL TestNG 自动化测试'
+        // 使用环境变量指定 Maven 和 Java 路径（已自动检测并配置）
+        MAVEN_HOME = '/Users/joe/Documents/tools/apache-maven-3.9.9'
+        JAVA_HOME = '/Users/joe/Documents/tools/jdk-17.0.2.jdk/Contents/Home'
+        PATH = "${MAVEN_HOME}/bin:${JAVA_HOME}/bin:${env.PATH}"
     }
     
     stages {

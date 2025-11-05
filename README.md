@@ -7,9 +7,10 @@
 - `src/test/java/TestNGTestCases.java` - 包含三条测试用例的 Java 测试类
 - `src/test/resources/testng.xml` - TestNG 配置文件
 - `pom.xml` - Maven 项目配置文件
-- `Jenkinsfile` - Jenkins Pipeline 配置文件（完整版）
+- `Jenkinsfile` - Jenkins Pipeline 配置文件（完整版，包含邮件通知功能）
 - `Jenkinsfile-simple` - Jenkins Pipeline 配置文件（简化版）
 - `jenkins-setup.md` - Jenkins 配置详细指南
+- `jenkins-email-config.md` - Jenkins 邮件配置指南
 
 ## 测试用例
 
@@ -72,9 +73,25 @@ java -cp ".:testng-7.8.0.jar:jcommander-1.82.jar" org.testng.TestNG testng.xml
 
 详细配置说明请参考 [jenkins-setup.md](jenkins-setup.md)
 
+### 邮件通知功能
+
+Jenkins Pipeline 配置了自动邮件通知功能，测试完成后会自动发送邮件到 `17381915093@163.com`。
+
+**邮件内容包括：**
+- 📋 构建信息（构建编号、触发用户、构建时间、Git信息等）
+- 📊 测试摘要（总测试数、通过/失败/跳过数量、通过率）
+- 📝 测试用例详细信息（每个用例的ID、名称、类名、描述、执行时间、执行结果）
+
+**配置步骤：**
+1. 安装 Email Extension Plugin
+2. 配置 163 邮箱 SMTP 服务器
+3. 获取并配置 163 邮箱授权码
+
+详细配置说明请参考 [jenkins-email-config.md](jenkins-email-config.md)
+
 ### Jenkins Pipeline 文件
 
-- **Jenkinsfile** - 完整版 Pipeline，包含详细的阶段和报告发布
+- **Jenkinsfile** - 完整版 Pipeline，包含详细的阶段、报告发布和邮件通知功能
 - **Jenkinsfile-simple** - 简化版 Pipeline，适合快速配置
 
 ## 注意事项
@@ -83,6 +100,7 @@ java -cp ".:testng-7.8.0.jar:jcommander-1.82.jar" org.testng.TestNG testng.xml
 - 如果使用 Maven，确保已安装 Maven
 - 测试用例按优先级（priority）顺序执行
 - Jenkins 需要安装以下插件：
+  - Email Extension Plugin（用于发送邮件通知）
   - HTML Publisher Plugin（用于发布测试报告）
   - Pipeline Plugin（通常已默认安装）
 
